@@ -1,16 +1,119 @@
-{-# LANGUAGE TemplateHaskell,PatternGuards #-}
+{-# LANGUAGE TemplateHaskell,PatternGuards,RecordWildCards #-}
 module Data.Generics.Genifunctors where
 
 import Language.Haskell.TH
 import Control.Applicative
 import Control.Monad
-import Control.Monad.State
-import Control.Monad.Writer
+import Control.Monad.RWS
 import Data.Map (Map)
 import qualified Data.Map as M
 
 import Control.Exception(assert)
 import Data.Maybe
+
+type GenM = RWST Generator [Dec] (Map Name Name) Q
+
+data Generator = Generator
+    { gen_combine   :: Name -> [Exp] -> Exp
+    , gen_primitive :: Exp -> Exp
+    , gen_type      :: Name -> [Name] -> Q Type
+    }
+
+gen :: Generator -> Name -> Q Exp
+gen generator tc = do
+    (fn,decls) <- evalRWST (generate tc) generator M.empty
+    return $ LetE decls (VarE fn)
+
+
+genFmap :: Name -> Q Exp
+genFmap = gen Generator
+    { gen_combine   = fmapCombine
+    , gen_primitive = fmapPrimitive
+    , gen_type      = fmapType
+    }
+
+genFoldMap :: Name -> Q Exp
+genFoldMap = gen Generator
+    { gen_combine   = foldMapCombine
+    , gen_primitive = foldMapPrimitive
+    , gen_type      = foldMapType
+    }
+
+genTraverse :: Name -> Q Exp
+genTraverse = gen Generator
+    { gen_combine   = traverseCombine
+    , gen_primitive = traversePrimitive
+    , gen_type      = traverseType
+    }
+
+fmapCombine :: Name -> [Exp] -> Exp
+fmapCombine con_name args = foldl AppE (ConE con_name) args
+
+foldMapCombine :: Name -> [Exp] -> Exp
+foldMapCombine _con_name []     = VarE 'mempty
+foldMapCombine _con_name (a:as) = foldr (<<>>) a as
+
+traverseCombine :: Name -> [Exp] -> Exp
+traverseCombine con_name []     = VarE 'pure `AppE` ConE con_name
+traverseCombine con_name (a:as) = foldl (<***>) (ConE con_name <$$> a) as
+
+mkInfix :: Name -> Exp -> Exp -> Exp
+mkInfix n e1 e2 = InfixE (Just e1) (VarE n) (Just e2)
+
+(<***>) :: Exp -> Exp -> Exp
+(<***>) = mkInfix '(<*>)
+
+(<$$>) :: Exp -> Exp -> Exp
+(<$$>) = mkInfix '(<$>)
+
+(<<>>) :: Exp -> Exp -> Exp
+(<<>>) = mkInfix 'mappend
+
+fmapPrimitive :: Exp -> Exp
+fmapPrimitive = id
+
+foldMapPrimitive :: Exp -> Exp
+foldMapPrimitive = const (VarE 'mempty)
+
+traversePrimitive :: Exp -> Exp
+traversePrimitive e = VarE 'pure `AppE` e
+
+fmapType :: Name -> [Name] -> Q Type
+fmapType tc tvs = do
+    from <- mapM (newName . nameBase) tvs
+    to   <- mapM (newName . nameBase) tvs
+    return $ ForallT (map PlainTV (from ++ to)) []
+           $ foldr arr
+                (applyTyVars tc from `arr` applyTyVars tc to)
+                (zipWith arr (map VarT from) (map VarT to))
+
+foldMapType :: Name -> [Name] -> Q Type
+foldMapType tc tvs = do
+    m <- newName "m"
+    from <- mapM (newName . nameBase) tvs
+    return $ ForallT (map PlainTV (m : from)) [ClassP ''Monoid [VarT m]]
+           $ foldr arr
+                (applyTyVars tc from `arr` VarT m)
+                (zipWith arr (map VarT from) (repeat (VarT m)))
+
+traverseType :: Name -> [Name] -> Q Type
+traverseType tc tvs = do
+    f <- newName "f"
+    from <- mapM (newName . nameBase) tvs
+    to   <- mapM (newName . nameBase) tvs
+    return $ ForallT (map PlainTV (f : from ++ to)) [ClassP ''Applicative [VarT f]]
+           $ foldr arr
+                (applyTyVars tc from `arr` (VarT f `AppT` applyTyVars tc to))
+                (zipWith arr (map VarT from) (map (\ t -> VarT f `AppT` VarT t) to))
+
+genMatch :: Type -> [(Name,Name)] -> GenM Exp
+genMatch t tvfs = case t of
+    VarT a     | Just f <- lookup a tvfs -> return (VarE f)
+    AppT t1 t2 -> AppE <$> genMatch t1 tvfs <*> genMatch t2 tvfs
+    ConT tc    -> VarE <$> generate tc
+    TupleT i   -> VarE <$> generate (tupleTypeName i)
+    ListT      -> VarE <$> generate ''[]
+    _          -> error $ "genMatch:" ++ show t
 
 simpCon :: Con -> (Name,[Type])
 simpCon con = case con of
@@ -19,63 +122,44 @@ simpCon con = case con of
     InfixC t1 n t2 -> (n,[snd t1,snd t2])
     ForallC{}      -> error "simpCon: ForallC"
 
--- | f = $(genFunctor T)
-genFunctor :: Name -> Q Exp
-genFunctor tc = do
-    (fn,decls) <- runWriterT $ genMultiFunctor tc `evalStateT` M.empty
-    return $ LetE decls (VarE fn)
 
-type GenM = StateT (Map Name Name) (WriterT [Dec] Q)
-
-genMatch :: Type -> [(Name,Name)] -> GenM Exp
-genMatch t tvfs = case t of
-    VarT a     | Just f <- lookup a tvfs -> return (VarE f)
-    AppT t1 t2 -> AppE <$> genMatch t1 tvfs <*> genMatch t2 tvfs
-    ConT tc    -> VarE <$> genMultiFunctor tc
-    TupleT i   -> VarE <$> genMultiFunctor (tupleTypeName i)
-    ListT      -> VarE <$> genMultiFunctor ''[]
-    _          -> error $ "genMatch:" ++ show t
-
-genMultiFunctor :: Name -> GenM Name
-genMultiFunctor tc = do
+generate :: Name -> GenM Name
+generate tc = do
     m_fn <- gets (M.lookup tc)
     case m_fn of
         Just fn -> return fn
         Nothing -> do
+
+            Generator{..} <- ask
+
             fn <- q $ newName ("_" ++ nameBase tc)
             modify (M.insert tc fn)
             (tvs,cons) <- getTyConInfo tc
             fs <- zipWithM (const . q . newName) (repeat "_f") tvs
             x <- q $ newName "_x"
 
-            ms <-
-                if null cons || null tvs
-                    then return [Match WildP (NormalB $ VarE x) []]  -- primitive data types/non polymorphic
-                    else forM (map simpCon cons) $ \ (con_name,ts) -> do
+            body <- if null cons || null tvs
+                then return $ gen_primitive (VarE x)  -- primitive data types/non polymorphic
+                else do
+                    matches <- forM (map simpCon cons) $ \ (con_name,ts) -> do
+
                         ys <- zipWithM (const . q . newName) (repeat "_y") ts
-                        body <- foldl AppE (ConE con_name) <$> sequence
+
+                        lhs <- gen_combine con_name <$> sequence
                                 [ do t' <- q (expandSyn t)
                                      le <- genMatch t' (zip tvs fs)
                                      return (le `AppE` VarE y)
                                 | (y,t) <- zip ys ts ]
 
-                        return $ Match (ConP con_name (map VarP ys)) (NormalB body) []
+                        return $ Match (ConP con_name (map VarP ys)) (NormalB lhs) []
 
-            from <- mapM (q . newName . nameBase) tvs
-            to   <- mapM (q . newName . nameBase) tvs
-            let ty = ForallT (map PlainTV (from ++ to)) []
-                   $ foldr arr
-                        (applyTyVars tc from `arr` applyTyVars tc to)
-                        (zipWith arr (map VarT from) (map VarT to))
+                    return (CaseE (VarE x) matches)
+
+            ty <- q $ gen_type tc tvs
 
             tell
                 [ SigD fn ty
-                , FunD fn
-                    [ Clause
-                        (map VarP (fs ++ [x]))
-                        (NormalB $ CaseE (VarE x) $ ms)
-                        []
-                    ]
+                , FunD fn [ Clause (map VarP (fs ++ [x])) (NormalB $ body) [] ]
                 ]
             return fn
 
@@ -86,7 +170,7 @@ applyTyVars :: Name -> [Name] -> Type
 applyTyVars tc ns = foldl AppT (ConT tc) (map VarT ns)
 
 q :: Q a -> GenM a
-q = lift . lift
+q = lift
 
 -- The following functions are by Lennart in Geniplate
 
@@ -140,24 +224,3 @@ subst s (AppT t1 t2) = AppT (subst s t1) (subst s t2)
 subst s (SigT t k) = SigT (subst s t) k
 subst _ t = t
 
-
-
-{-
--- | name has type
--- (x1 -> x1') -> ... -> (xn -> xn') -> T x1 .. xn -> T x1 ... xn'
-getFunctorTypeInfo :: Name -> Q ([(Name,Name)],Name)
-getFunctorTypeInfo name = do
-    info <- reify name
-    let strip []  (ForallT _tvs [] t)           = strip [] t
-        strip acc ((ArrowT `AppT` i) `AppT` o) = case i of
-            (ArrowT `AppT` VarT x) `AppT` VarT x' -> strip ((x,x'):acc) o
-            _                                     -> (reverse acc,tycon acc i o)
-        strip _ _ = error "strip"
-
-        tycon ((x,x'):acc) (AppT t (VarT y)) (AppT t' (VarT y')) | x == y && x' == y' = tycon acc t t'
-        tycon []           (ConT tc)         (ConT tc')          | tc == tc'          = tc
-        tycon _ _ _ = error "tycon"
-    case info of
-        VarI _ t _ _ -> return $ strip [] t
-        _            -> error "info"
-        -}

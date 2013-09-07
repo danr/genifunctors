@@ -1,33 +1,30 @@
-{-# LANGUAGE TemplateHaskell,DeriveFunctor #-}
+{-# LANGUAGE TemplateHaskell #-}
 module Test where
 
 import Data.Generics.Genifunctors
+import Data.Monoid
+import Control.Applicative
 
-data T a b
-    = T a b
-    | L a
-    | R b
-    | Rec (T a b)
-    | J Int | J2 Double | J3 Bool
-    | K (a,a)
-    | List [(a,T a b)]
-    | S String
+data U a b c d
+    = A a b (U a b c d)
+    | B c d (U a b c d)
+    | C a
+    | D (U d b c a)
+    | E (U (a,b) (b,a) (Either c d) (Either d c))
+    | F [U [a] [U b c d a] (Int,String) Double]
+    | G (V a b) (V c d) (U (V a b) (V b c) (V c d) (V a d))
 
-data A a = B (B a) | V a
-data B b = A (A b) | U b
+data V u v
+    = X (U u v u v)
+    | Y (U v v u u)
+    | Z u
 
-data P a = P (P (a,a)) | X a
+fmapU :: (a -> a') -> (b -> b') -> (c -> c') -> (d -> d') -> U a b c d -> U a' b' c' d'
+fmapU = $(genFmap ''U)
 
-bit :: (a -> a') -> (b -> b') -> T a b -> T a' b'
-bit = $(genFunctor ''T)
+foldU :: Monoid m => (a -> m) -> (b -> m) -> (c -> m) -> (d -> m) -> U a b c d -> m
+foldU = $(genFoldMap ''U)
 
-jit :: (a -> b) -> A a -> A b
-jit = $(genFunctor ''A)
+travU :: Applicative f => (a -> f a') -> (b -> f b') -> (c -> f c') -> (d -> f d') -> U a b c d -> f (U a' b' c' d')
+travU = $(genTraverse ''U)
 
-pit :: (a -> b) -> P a -> P b
-pit = $(genFunctor ''P)
-
-data U a b c d = W a b (U a b c d) | I c d (U a b c d) | Y a | Z (U d b c a)
-
-uit :: (a -> a1) -> (b -> b1) -> (c -> c1) -> (d -> d1) -> U a b c d -> U a1 b1 c1 d1
-uit = $(genFunctor ''U)
