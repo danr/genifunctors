@@ -9,6 +9,9 @@ import Control.Monad.Writer
 import Data.Map (Map)
 import qualified Data.Map as M
 
+import Control.Exception(assert)
+import Data.Maybe
+
 simpCon :: Con -> (Name,[Type])
 simpCon con = case con of
     NormalC n ts   -> (n,map snd ts)
@@ -51,7 +54,8 @@ genMultiFunctor tc = do
                     else forM (map simpCon cons) $ \ (con_name,ts) -> do
                         ys <- zipWithM (const . q . newName) (repeat "_y") ts
                         body <- foldl AppE (ConE con_name) <$> sequence
-                                [ do le <- genMatch t (zip tvs fs)
+                                [ do t' <- q (expandSyn t)
+                                     le <- genMatch t' (zip tvs fs)
                                      return (le `AppE` VarE y)
                                 | (y,t) <- zip ys ts ]
 
@@ -84,6 +88,8 @@ applyTyVars tc ns = foldl AppT (ConT tc) (map VarT ns)
 q :: Q a -> GenM a
 q = lift . lift
 
+-- The following functions are by Lennart in Geniplate
+
 getTyConInfo :: Name -> GenM ([Name], [Con])
 getTyConInfo con = do
     info <- q (reify con)
@@ -96,9 +102,43 @@ getTyConInfo con = do
     unPlainTv (PlainTV tv) = tv
     unPlainTv i            = error $ "unexpected non-plain TV" ++ show i
 
+expandSyn ::  Type -> Q Type
+expandSyn (ForallT tvs ctx t) = liftM (ForallT tvs ctx) $ expandSyn t
+expandSyn t@AppT{} = expandSynApp t []
+expandSyn t@ConT{} = expandSynApp t []
+expandSyn (SigT t _) = expandSyn t   -- Ignore kind synonyms
+expandSyn t = return t
+
+expandSynApp :: Type -> [Type] -> Q Type
+expandSynApp (AppT t1 t2) ts = do t2' <- expandSyn t2; expandSynApp t1 (t2':ts)
+expandSynApp (ConT n) ts | nameBase n == "[]" = return $ foldl AppT ListT ts
+expandSynApp t@(ConT n) ts = do
+    info <- reify n
+    case info of
+        TyConI (TySynD _ tvs rhs) ->
+            let (ts', ts'') = splitAt (length tvs) ts
+                s = mkSubst tvs ts'
+                rhs' = subst s rhs
+            in  expandSynApp rhs' ts''
+        _ -> return $ foldl AppT t ts
+expandSynApp t ts = do t' <- expandSyn t; return $ foldl AppT t' ts
 
 
+type Subst = [(Name, Type)]
 
+mkSubst :: [TyVarBndr] -> [Type] -> Subst
+mkSubst vs ts =
+   let vs' = map un vs
+       un (PlainTV v) = v
+       un (KindedTV v _) = v
+   in  assert (length vs' == length ts) $ zip vs' ts
+
+subst :: Subst -> Type -> Type
+subst s (ForallT v c t) = ForallT v c $ subst s t
+subst s t@(VarT n) = fromMaybe t $ lookup n s
+subst s (AppT t1 t2) = AppT (subst s t1) (subst s t2)
+subst s (SigT t k) = SigT (subst s t) k
+subst _ t = t
 
 
 

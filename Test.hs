@@ -3,7 +3,15 @@ module Test where
 
 import Data.Generics.Genifunctors
 
-data T a b = T a b | L a | R b | Rec (T a b) | J Int | K (a,a) | List [(a,T a b)]
+data T a b
+    = T a b
+    | L a
+    | R b
+    | Rec (T a b)
+    | J Int | J2 Double | J3 Bool
+    | K (a,a)
+    | List [(a,T a b)]
+    | S String
 
 data A a = B (B a) | V a
 data B b = A (A b) | U b
