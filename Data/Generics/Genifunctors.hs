@@ -1,5 +1,27 @@
 {-# LANGUAGE TemplateHaskell,PatternGuards,RecordWildCards #-}
-module Data.Generics.Genifunctors where
+-- | Generate (derive) generalized 'fmap', 'foldMap' and 'traverse' for Bifunctors, Trifunctors, or a functor with any arity
+--
+-- Example:
+--
+-- @
+--data U a b c d
+--    = L [U a b c d]               -- polymorphic recursion
+--    | M (V (a,b) (Either c d))    -- mutually recursive
+--    | a :+: Int                   -- infix syntax, record syntax, type synonyms
+--    | R { c :: c, d :: String }   -- and primitive data types supported
+--
+--data V u v = X (U v v u u) | Z u
+--
+--fmapU :: (a -> a') -> (b -> b') -> (c -> c') -> (d -> d') -> U a b c d -> U a' b' c' d'
+--fmapU = $(genFmap ''U)
+--
+--foldU :: Monoid m => (a -> m) -> (b -> m) -> (c -> m) -> (d -> m) -> U a b c d -> m
+--foldU = $(genFoldMap ''U)
+--
+--travU :: Applicative f => (a -> f a') -> (b -> f b') -> (c -> f c') -> (d -> f d') -> U a b c d -> f (U a' b' c' d')
+--travU = $(genTraverse ''U)
+-- @
+module Data.Generics.Genifunctors (genFmap, genFoldMap, genTraverse) where
 
 import Language.Haskell.TH
 import Control.Applicative
@@ -25,6 +47,12 @@ gen generator tc = do
     return $ LetE decls (VarE fn)
 
 
+-- | Generate generalized 'fmap' for a type
+--
+-- @
+--bimapTuple :: (a -> a') -> (b -> b') -> (a,b) -> (a',b')
+--bimapTuple = $(genFmap ''(,))
+-- @
 genFmap :: Name -> Q Exp
 genFmap = gen Generator
     { gen_combine   = fmapCombine
@@ -32,6 +60,12 @@ genFmap = gen Generator
     , gen_type      = fmapType
     }
 
+-- | Generate generalized 'foldMap' for a type
+--
+-- @
+--foldMapEither :: Monoid m => (a -> m) -> (b -> m) -> Either a b -> m
+--foldMapEither = $(genFoldMap ''Either)
+-- @
 genFoldMap :: Name -> Q Exp
 genFoldMap = gen Generator
     { gen_combine   = foldMapCombine
@@ -39,11 +73,17 @@ genFoldMap = gen Generator
     , gen_type      = foldMapType
     }
 
+-- | Generate generalized 'traversable' for a type
+--
+-- @
+--travTriple :: Applicative f => (a -> f a') -> (b -> f b') -> (c -> f c') -> (a,b,c) -> f (a',b',c')
+--travTriple = $(genTraverse ''(,,))
+-- @
 genTraverse :: Name -> Q Exp
 genTraverse = gen Generator
     { gen_combine   = traverseCombine
     , gen_primitive = traversePrimitive
-    , gen_type      = traverseType
+    , gen_type      = traverseType ''Applicative
     }
 
 fmapCombine :: Name -> [Exp] -> Exp
@@ -96,12 +136,12 @@ foldMapType tc tvs = do
                 (applyTyVars tc from `arr` VarT m)
                 (zipWith arr (map VarT from) (repeat (VarT m)))
 
-traverseType :: Name -> [Name] -> Q Type
-traverseType tc tvs = do
+traverseType :: Name -> Name -> [Name] -> Q Type
+traverseType constraint_class tc tvs = do
     f <- newName "f"
     from <- mapM (newName . nameBase) tvs
     to   <- mapM (newName . nameBase) tvs
-    return $ ForallT (map PlainTV (f : from ++ to)) [ClassP ''Applicative [VarT f]]
+    return $ ForallT (map PlainTV (f : from ++ to)) [ClassP constraint_class [VarT f]]
            $ foldr arr
                 (applyTyVars tc from `arr` (VarT f `AppT` applyTyVars tc to))
                 (zipWith arr (map VarT from) (map (\ t -> VarT f `AppT` VarT t) to))
@@ -172,7 +212,7 @@ applyTyVars tc ns = foldl AppT (ConT tc) (map VarT ns)
 q :: Q a -> GenM a
 q = lift
 
--- The following functions are by Lennart in Geniplate
+-- All the following functions are by Lennart in Geniplate
 
 getTyConInfo :: Name -> GenM ([Name], [Con])
 getTyConInfo con = do
