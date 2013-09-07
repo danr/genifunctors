@@ -2,8 +2,12 @@
 module Data.Generics.Genifunctors where
 
 import Language.Haskell.TH
+import Control.Applicative
 import Control.Monad
-import Data.List
+import Control.Monad.State
+import Control.Monad.Writer
+import Data.Map (Map)
+import qualified Data.Map as M
 
 simpCon :: Con -> (Name,[Type])
 simpCon con = case con of
@@ -12,29 +16,93 @@ simpCon con = case con of
     InfixC t1 n t2 -> (n,[snd t1,snd t2])
     ForallC{}      -> error "simpCon: ForallC"
 
--- | f = $(genFunctor T f)
-genFunctor :: Name -> Name -> Q Exp
-genFunctor tc_name f_name = do
-    (tvs,cons) <- getTyConInfo tc_name
-    fs <- zipWithM (const . newName) (repeat "_f") tvs
-    x <- newName "_x"
+-- | f = $(genFunctor T)
+genFunctor :: Name -> Q Exp
+genFunctor tc = do
+    (fn,decls) <- runWriterT $ genMultiFunctor tc `evalStateT` M.empty
+    return $ LetE decls (VarE fn)
 
-    let ty  = foldl AppT (ConT tc_name) (map VarT tvs)
-        rec = foldl AppE (VarE f_name) (map VarE fs)
+type GenM = StateT (Map Name Name) (WriterT [Dec] Q)
 
-    ms <- forM (map simpCon cons) $ \ (con_name,ts) -> do
-        ys <- zipWithM (const . newName) (repeat "_y") ts
-        let body = foldl AppE (ConE con_name)
-                [ case t of
-                    VarT a | Just i <- elemIndex a tvs -> AppE (VarE (fs !! i)) (VarE y)
-                    _ | t == ty                        -> AppE rec (VarE y)
-                    _                                  -> VarE y
-                | (y,t) <- zip ys ts
+genMatch :: Type -> [(Name,Name)] -> GenM Exp
+genMatch t tvfs = case t of
+    VarT a     | Just f <- lookup a tvfs -> return (VarE f)
+    AppT t1 t2 -> AppE <$> genMatch t1 tvfs <*> genMatch t2 tvfs
+    ConT tc    -> VarE <$> genMultiFunctor tc
+    TupleT i   -> VarE <$> genMultiFunctor (tupleTypeName i)
+    ListT      -> VarE <$> genMultiFunctor ''[]
+    _          -> error $ "genMatch:" ++ show t
+
+genMultiFunctor :: Name -> GenM Name
+genMultiFunctor tc = do
+    m_fn <- gets (M.lookup tc)
+    case m_fn of
+        Just fn -> return fn
+        Nothing -> do
+            fn <- q $ newName ("_" ++ nameBase tc)
+            modify (M.insert tc fn)
+            (tvs,cons) <- getTyConInfo tc
+            fs <- zipWithM (const . q . newName) (repeat "_f") tvs
+            x <- q $ newName "_x"
+
+            ms <-
+                if null cons || null tvs
+                    then return [Match WildP (NormalB $ VarE x) []]  -- primitive data types/non polymorphic
+                    else forM (map simpCon cons) $ \ (con_name,ts) -> do
+                        ys <- zipWithM (const . q . newName) (repeat "_y") ts
+                        body <- foldl AppE (ConE con_name) <$> sequence
+                                [ do le <- genMatch t (zip tvs fs)
+                                     return (le `AppE` VarE y)
+                                | (y,t) <- zip ys ts ]
+
+                        return $ Match (ConP con_name (map VarP ys)) (NormalB body) []
+
+            from <- mapM (q . newName . nameBase) tvs
+            to   <- mapM (q . newName . nameBase) tvs
+            let ty = ForallT (map PlainTV (from ++ to)) []
+                   $ foldr arr
+                        (applyTyVars tc from `arr` applyTyVars tc to)
+                        (zipWith arr (map VarT from) (map VarT to))
+
+            tell
+                [ SigD fn ty
+                , FunD fn
+                    [ Clause
+                        (map VarP (fs ++ [x]))
+                        (NormalB $ CaseE (VarE x) $ ms)
+                        []
+                    ]
                 ]
-        return $ Match (ConP con_name (map VarP ys)) (NormalB body) []
+            return fn
 
-    return $ LamE (map VarP (fs ++ [x])) $ CaseE (VarE x) ms
+arr :: Type -> Type -> Type
+arr t1 t2 = (ArrowT `AppT` t1) `AppT` t2
 
+applyTyVars :: Name -> [Name] -> Type
+applyTyVars tc ns = foldl AppT (ConT tc) (map VarT ns)
+
+q :: Q a -> GenM a
+q = lift . lift
+
+getTyConInfo :: Name -> GenM ([Name], [Con])
+getTyConInfo con = do
+    info <- q (reify con)
+    case info of
+        TyConI (DataD _ _ tvs cs _) -> return (map unPlainTv tvs, cs)
+        TyConI (NewtypeD _ _ tvs c _) -> return (map unPlainTv tvs, [c])
+        PrimTyConI{} -> return ([], [])
+        i -> error $ "unexpected TyCon: " ++ show i
+  where
+    unPlainTv (PlainTV tv) = tv
+    unPlainTv i            = error $ "unexpected non-plain TV" ++ show i
+
+
+
+
+
+
+
+{-
 -- | name has type
 -- (x1 -> x1') -> ... -> (xn -> xn') -> T x1 .. xn -> T x1 ... xn'
 getFunctorTypeInfo :: Name -> Q ([(Name,Name)],Name)
@@ -52,17 +120,4 @@ getFunctorTypeInfo name = do
     case info of
         VarI _ t _ _ -> return $ strip [] t
         _            -> error "info"
-
-getTyConInfo :: Name -> Q ([Name], [Con])
-getTyConInfo con = do
-    info <- reify con
-    case info of
-        TyConI (DataD _ _ tvs cs _) -> return (map unPlainTv tvs, cs)
-        TyConI (NewtypeD _ _ tvs c _) -> return (map unPlainTv tvs, [c])
-        PrimTyConI{} -> return ([], [])
-        i -> error $ "unexpected TyCon: " ++ show i
-  where
-    unPlainTv (PlainTV tv) = tv
-    unPlainTv i            = error $ "unexpected non-plain TV" ++ show i
-
-
+        -}
