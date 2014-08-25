@@ -137,8 +137,8 @@ fmapCombine :: Name -> [Exp] -> Exp
 fmapCombine con_name args = foldl AppE (ConE con_name) args
 
 foldMapCombine :: Name -> [Exp] -> Exp
-foldMapCombine _con_name []     = VarE 'mempty
-foldMapCombine _con_name (a:as) = foldr (<<>>) a as
+foldMapCombine _con_name [] = VarE 'mempty
+foldMapCombine _con_name as = foldr1 (<<>>) as
 
 traverseCombine :: Name -> [Exp] -> Exp
 traverseCombine con_name []     = VarE 'pure `AppE` ConE con_name
