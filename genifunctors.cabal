@@ -9,6 +9,12 @@ maintainer:          danr@chalmers.se
 category:            Generics
 build-type:          Simple
 cabal-version:       >=1.10
+homepage:            https://github.com/danr/genifunctors
+bug-reports:         https://github.com/danr/genifunctors/issues
+
+source-repository head
+  type: git
+  location: git://github.com/danr/genifunctors.git
 
 library
     exposed-modules:     Data.Generics.Genifunctors

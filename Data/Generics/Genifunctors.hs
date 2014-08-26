@@ -21,7 +21,17 @@
 --travU :: Applicative f => (a -> f a') -> (b -> f b') -> (c -> f c') -> (d -> f d') -> U a b c d -> f (U a' b' c' d')
 --travU = $(genTraverse ''U)
 -- @
-module Data.Generics.Genifunctors (genFmap, genFoldMap, genTraverse) where
+--
+-- 'genFoldMapT' and 'genTraverseT' allow for specifying custom functions to handle
+-- subparts of a specific type. The compiler will throw an error if any of the
+-- types is actually a type synonym.
+module Data.Generics.Genifunctors
+  ( genFmap
+  , genFoldMap
+  , genFoldMapT
+  , genTraverse
+  , genTraverseT
+  ) where
 
 import Language.Haskell.TH
 import Control.Applicative
@@ -42,10 +52,18 @@ data Generator = Generator
     }
 
 gen :: Generator -> Name -> Q Exp
-gen generator tc = do
-    (fn,decls) <- evalRWST (generate tc) generator M.empty
+gen g = genT g []
+        
+genT :: Generator -> [(Name,Name)] -> Name -> Q Exp
+genT generator predef tc = do
+    forM_ predef $ \(con,_) -> do
+      info <- reify con
+      case info of
+        TyConI (TySynD{}) -> fail $ show con ++ " is a type synonym."
+        TyConI _          -> return ()
+        _                 -> fail $ show con ++ " is not a type constructor." 
+    (fn,decls) <- evalRWST (generate tc) generator $ M.fromList predef
     return $ LetE decls (VarE fn)
-
 
 -- | Generate generalized 'fmap' for a type
 --
@@ -67,7 +85,20 @@ genFmap = gen Generator
 --foldMapEither = $(genFoldMap ''Either)
 -- @
 genFoldMap :: Name -> Q Exp
-genFoldMap = gen Generator
+genFoldMap = genFoldMapT []
+
+-- | Generate generalized 'foldMap' for a type, optionally traversing
+--   subparts of it with custom implementations.
+--
+-- @
+--foldTupleRev :: Monoid m => (a -> m) -> (b -> m) -> (a,b) -> m
+--foldTupleRev f g (a,b) = g b <> f a
+--
+--foldUCustom :: Monoid m => (a -> m) -> (b -> m) -> (c -> m) -> (d -> m) -> U a b c d -> m
+--foldUCustom = $(genFoldMapT [(''(,), 'foldTupleRev)] ''U)
+-- @
+genFoldMapT :: [(Name,Name)] -> Name -> Q Exp
+genFoldMapT = genT Generator
     { gen_combine   = foldMapCombine
     , gen_primitive = foldMapPrimitive
     , gen_type      = foldMapType
@@ -80,7 +111,23 @@ genFoldMap = gen Generator
 --travTriple = $(genTraverse ''(,,))
 -- @
 genTraverse :: Name -> Q Exp
-genTraverse = gen Generator
+genTraverse = genTraverseT []
+
+-- | Generate generalized 'traversable' for a type, optionally traversing
+--   subparts of it with custom implementations.
+--
+-- @
+--travTupleRev :: Applicative f => (a -> f a') -> (b -> f b') -> (a,b) -> f (a',b')
+--travTupleRev f g (a,b) = (\b a -> (a,b)) <$> g b <*> f a
+--
+--travUCustom :: Applicative f => (a -> f a') -> (b -> f b') -> (c -> f c') -> (d -> f d') -> U a b c d -> f (U a' b' c' d')
+--travUCustom = $(genTraverseT [(''(,), 'travTupleRev), (''V, 'travVCustom)] ''U)
+--
+--travVCustom :: Applicative f => (a -> f a') -> (b -> f b') -> V a b -> f (V a' b')
+--travVCustom = $(genTraverseT [(''U, 'travUCustom)] ''V)
+-- @
+genTraverseT :: [(Name, Name)] -> Name -> Q Exp
+genTraverseT = genT Generator
     { gen_combine   = traverseCombine
     , gen_primitive = traversePrimitive
     , gen_type      = traverseType ''Applicative
@@ -90,8 +137,8 @@ fmapCombine :: Name -> [Exp] -> Exp
 fmapCombine con_name args = foldl AppE (ConE con_name) args
 
 foldMapCombine :: Name -> [Exp] -> Exp
-foldMapCombine _con_name []     = VarE 'mempty
-foldMapCombine _con_name (a:as) = foldr (<<>>) a as
+foldMapCombine _con_name [] = VarE 'mempty
+foldMapCombine _con_name as = foldr1 (<<>>) as
 
 traverseCombine :: Name -> [Exp] -> Exp
 traverseCombine con_name []     = VarE 'pure `AppE` ConE con_name
