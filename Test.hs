@@ -29,7 +29,7 @@ travTriple :: Applicative f => (a -> f a') -> (b -> f b') -> (c -> f c') -> (a,b
 travTriple = $(genTraverse ''(,,))
 
 foldTupleRev :: Monoid m => (a -> m) -> (b -> m) -> (a,b) -> m
-foldTupleRev f g (a,b) = g b <> f a
+foldTupleRev f g (a,b) = g b `mappend` f a
 
 foldUCustom :: Monoid m => (a -> m) -> (b -> m) -> (c -> m) -> (d -> m) -> U a b c d -> m
 foldUCustom = $(genFoldMapT [(''(,), 'foldTupleRev)] ''U)
