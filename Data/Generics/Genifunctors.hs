@@ -271,7 +271,8 @@ getTyConInfo con = do
         i -> error $ "unexpected TyCon: " ++ show i
   where
     unPlainTv (PlainTV tv) = tv
-    unPlainTv i            = error $ "unexpected non-plain TV" ++ show i
+    unPlainTv (KindedTV tv StarT) = tv
+    unPlainTv i = error $ "unexpected non-plain TV" ++ show i
 
 expandSyn ::  Type -> Q Type
 expandSyn (ForallT tvs ctx t) = liftM (ForallT tvs ctx) $ expandSyn t
