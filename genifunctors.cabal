@@ -1,5 +1,5 @@
 name:                genifunctors
-version:             0.2.0.0
+version:             0.2.1.0
 synopsis:            Generate generalized fmap, foldMap and traverse
 description:         Generate (derive) fmap, foldMap and traverse for Bifunctors, Trifunctors, or a functor with any arity
 license:             BSD3
@@ -11,6 +11,7 @@ build-type:          Simple
 cabal-version:       >=1.10
 homepage:            https://github.com/danr/genifunctors
 bug-reports:         https://github.com/danr/genifunctors/issues
+extra-source-files:  TestTypes.hs
 
 source-repository head
   type: git
