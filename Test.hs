@@ -43,6 +43,9 @@ travUCustom = $(genTraverseT [(''(,), 'travTupleRev), (''V, 'travVCustom)] ''U)
 travVCustom :: Applicative f => (a -> f a') -> (b -> f b') -> V a b -> f (V a' b')
 travVCustom = $(genTraverseT [(''U, 'travUCustom)] ''V)
 
+travW :: Applicative f => (a -> f a') -> (b -> f b') -> W a b -> f (W a' b')
+travW = $(genTraverse ''W)
+
 assertEq :: (Show a,Eq a) => a -> a -> IO ()
 assertEq a b | a == b = return ()
 assertEq a b = do
@@ -59,5 +62,6 @@ main = do
     let t = tell . s
     assertEq (execWriter (travU t t t t v)) ([0,5,2,3,6])
     assertEq (execWriter (travUCustom t t t t v)) ([0,5,3,2,6])
+    assertEq (execWriter (travW t t (W 3))) [3]
 
 
