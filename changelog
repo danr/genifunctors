@@ -1,0 +1,2 @@
+genifunctors 0.3 (released 2015-04-10)
+	* Support GHC 7.10, contributed by Ryan Scott.
