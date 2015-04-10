@@ -1,4 +1,4 @@
-{-# LANGUAGE TemplateHaskell,PatternGuards,RecordWildCards #-}
+{-# LANGUAGE CPP,TemplateHaskell,PatternGuards,RecordWildCards #-}
 -- | Generate (derive) generalized 'fmap', 'foldMap' and 'traverse' for Bifunctors, Trifunctors, or a functor with any arity
 --
 -- Example:
@@ -178,7 +178,12 @@ foldMapType :: Name -> [Name] -> Q Type
 foldMapType tc tvs = do
     m <- newName "m"
     from <- mapM (newName . nameBase) tvs
-    return $ ForallT (map PlainTV (m : from)) [ClassP ''Monoid [VarT m]]
+    return $ ForallT (map PlainTV (m : from))
+#if MIN_VERSION_template_haskell(2,10,0)
+                                              [AppT (ConT ''Monoid) (VarT m)]
+#else
+                                              [ClassP ''Monoid [VarT m]]
+#endif
            $ foldr arr
                 (applyTyVars tc from `arr` VarT m)
                 (zipWith arr (map VarT from) (repeat (VarT m)))
@@ -188,7 +193,12 @@ traverseType constraint_class tc tvs = do
     f <- newName "f"
     from <- mapM (newName . nameBase) tvs
     to   <- mapM (newName . nameBase) tvs
-    return $ ForallT (map PlainTV (f : from ++ to)) [ClassP constraint_class [VarT f]]
+    return $ ForallT (map PlainTV (f : from ++ to))
+#if MIN_VERSION_template_haskell(2,10,0)
+                                                    [AppT (ConT constraint_class) (VarT f)]
+#else
+                                                    [ClassP constraint_class [VarT f]]
+#endif
            $ foldr arr
                 (applyTyVars tc from `arr` (VarT f `AppT` applyTyVars tc to))
                 (zipWith arr (map VarT from) (map (\ t -> VarT f `AppT` VarT t) to))
@@ -219,7 +229,7 @@ generate tc = do
 
             Generator{..} <- ask
 
-            fn <- q $ newName ("_" ++ nameBase tc)
+            fn <- q $ newSanitizedName (nameBase tc)
             modify (M.insert tc fn)
             (tvs,cons) <- getTyConInfo tc
             fs <- zipWithM (const . q . newName) (repeat "_f") tvs
@@ -250,6 +260,13 @@ generate tc = do
                 ]
             return fn
 
+newSanitizedName :: String -> Q Name
+newSanitizedName nb = newName $ case nb of
+    "[]" -> "_List"
+    name | Just deg <- tupleDegreeMaybe name
+             -> "_Tuple" ++ show deg
+    name -> "_" ++ name
+
 arr :: Type -> Type -> Type
 arr t1 t2 = (ArrowT `AppT` t1) `AppT` t2
 
@@ -270,8 +287,13 @@ getTyConInfo con = do
         PrimTyConI{} -> return ([], [])
         i -> error $ "unexpected TyCon: " ++ show i
   where
-    unPlainTv (PlainTV tv) = tv
-    unPlainTv i            = error $ "unexpected non-plain TV" ++ show i
+    unPlainTv (PlainTV tv)        = tv
+#if MIN_VERSION_template_haskell(2,8,0)
+    unPlainTv (KindedTV tv StarT) = tv
+#else
+    unPlainTv (KindedTV tv StarK) = tv
+#endif
+    unPlainTv i                   = error $ "unexpected non-plain TV" ++ show i
 
 expandSyn ::  Type -> Q Type
 expandSyn (ForallT tvs ctx t) = liftM (ForallT tvs ctx) $ expandSyn t
@@ -311,3 +333,13 @@ subst s (AppT t1 t2) = AppT (subst s t1) (subst s t2)
 subst s (SigT t k) = SigT (subst s t) k
 subst _ t = t
 
+-- Written by Richard Eisenberg in th-desugar
+
+tupleDegreeMaybe :: String -> Maybe Int
+tupleDegreeMaybe s = do
+    '(' : s1 <- return s
+    (commas, ")") <- return $ span (== ',') s1
+    let degree
+          | "" <- commas = 0
+          | otherwise    = length commas + 1
+    return degree
