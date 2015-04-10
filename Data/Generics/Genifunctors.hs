@@ -44,6 +44,7 @@ import Control.Exception(assert)
 import Data.Maybe
 import Data.Either
 import Data.List
+import Data.Char
 
 type GenM = RWST Generator [Dec] (Map Name Name) Q
 
@@ -362,7 +363,7 @@ generate tc = do
   Generator{..} <- ask
 
   fn0 <- generate' tc
-  fn <- q $ newName ("_" ++ nameBase tc)
+  fn <- q $ newSanitizedName ("_" ++ nameBase tc)
   (tvs,_) <- getTyConInfo tc
   ty <- q $ gen_type tc tvs
   fs <- zipWithM (const . q . newName) (repeat "_f") tvs
@@ -418,11 +419,12 @@ generate' tc = do
             return fn
 
 newSanitizedName :: String -> Q Name
-newSanitizedName nb = newName $ case nb of
-    "[]" -> "_List"
-    name | Just deg <- tupleDegreeMaybe name
-             -> "_Tuple" ++ show deg
-    name -> "_" ++ name
+newSanitizedName nb = newName $ '_':'N':(
+    nb >>= \x -> case x of
+      c | isAlpha c || isDigit c -> c:[]
+      '\'' -> "\'"
+      '_'  -> "__"
+      c    -> "_" ++ show (ord c))
 
 arr :: Type -> Type -> Type
 arr t1 t2 = (ArrowT `AppT` t1) `AppT` t2
