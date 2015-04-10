@@ -224,7 +224,13 @@ foldMapType tc tvs' = do
     m <- newName "m"
     tvs  <- mapM rfrKinded tvs'
     from <- mapM rfrPlain tvs
-    return $ ForallT (lefts from ++ map PlainTV (m : rights from)) [ClassP ''Monoid [VarT m]]
+    return $ ForallT (lefts from ++ map PlainTV (m : rights from))
+#if MIN_VERSION_template_haskell(2,10,0)
+      [AppT (ConT ''Monoid) (VarT m)]
+#else
+      [ClassP ''Monoid [VarT m]]
+#endif
+
            $ foldr arr
                 (applyTyVars tc (map varName from) `arr` VarT m)
                 (zipWith arr (map VarT$ rights from) (repeat (VarT m)))
@@ -236,7 +242,12 @@ foldMapTypeInner tc tvs' = do
     tvs  <- mapM rfrKinded tvs'
     ignore <- mapM rfrKinded tvs'
     from <- mapM rfrPlain tvs
-    return $ ForallT (lefts from ++ map PlainTV (m : rights from) ++ [PlainTV (tyVarName i) | i <- lefts ignore]) [ClassP ''Monoid [VarT m]]
+    return $ ForallT (lefts from ++ map PlainTV (m : rights from) ++ [PlainTV (tyVarName i) | i <- lefts ignore])
+#if MIN_VERSION_template_haskell(2,10,0)
+      [AppT (ConT ''Monoid) (VarT m)]
+#else
+      [ClassP ''Monoid [VarT m]]
+#endif
            $ foldr arr
                 (applyTyVars tc (map varName from) `arr` VarT m)
                 [ case (i,a) of
@@ -250,7 +261,12 @@ traverseType constraint_class tc tvs' = do
     tvs  <- mapM rfrKinded tvs'
     from <- mapM rfrPlain tvs
     to   <- mapM rfrPlain tvs
-    return $ ForallT (lefts from ++ (map PlainTV (f: rights (from ++ to)))) [ClassP constraint_class [VarT f]]
+    return $ ForallT (lefts from ++ (map PlainTV (f: rights (from ++ to))))
+#if MIN_VERSION_template_haskell(2,10,0)
+      [AppT (ConT constraint_class) (VarT f)]
+#else
+      [ClassP constraint_class [VarT f]]
+#endif
            $ foldr arr
                 ((applyTyVars tc (map varName from)) `arr` (VarT f `AppT` applyTyVars tc (map varName to)))
                 (zipWith arr (map VarT $ rights from) (map (\ t -> VarT f `AppT` VarT t) $ rights to))
@@ -263,7 +279,11 @@ traverseTypeInner constraint_class tc tvs' = do
     from <- mapM rfrPlain tvs
     to   <- mapM rfrPlain tvs
     return $ ForallT (lefts from ++ (map PlainTV (f: rights (from ++ to))) ++ [PlainTV (tyVarName i) | i <- lefts ignore])
+#if MIN_VERSION_template_haskell(2,10,0)
+      [AppT (ConT constraint_class) (VarT f)]
+#else
       [ClassP constraint_class [VarT f]]
+#endif
            $ foldr arr
                 ((applyTyVars tc (map varName from)) `arr` (VarT f `AppT` applyTyVars tc (map varName to)))
                 [ case (i,a,b) of
@@ -366,7 +386,7 @@ generate' tc = do
 
             Generator{..} <- ask
 
-            fn <- q $ newName ("_" ++ nameBase tc)
+            fn <- q $ newSanitizedName (nameBase tc)
             modify (M.insert tc fn)
             (tvs,cons) <- getTyConInfo tc
             fs <- zipWithM (const . q . newName) (repeat "_f") tvs
@@ -397,6 +417,13 @@ generate' tc = do
                 ]
             return fn
 
+newSanitizedName :: String -> Q Name
+newSanitizedName nb = newName $ case nb of
+    "[]" -> "_List"
+    name | Just deg <- tupleDegreeMaybe name
+             -> "_Tuple" ++ show deg
+    name -> "_" ++ name
+
 arr :: Type -> Type -> Type
 arr t1 t2 = (ArrowT `AppT` t1) `AppT` t2
 
@@ -418,9 +445,9 @@ getTyConInfo con = do
         i -> error $ "unexpected TyCon: " ++ show i
   where
     unPlainTv (PlainTV tv) = Right tv
-#if __GLASGOW_HASKELL__ >= 706
+#if MIN_VERSION_template_haskell(2,8,0)
     unPlainTv (KindedTV i StarT) = Right i
-#elif __GLASGOW_HASKELL__ >= 704
+#else
     unPlainTv (KindedTV i StarK) = Right i
 #endif
     unPlainTv k@(KindedTV _ _) = Left k --  $ "unexpected non-plain TV" ++ show i
@@ -463,3 +490,13 @@ subst s (AppT t1 t2) = AppT (subst s t1) (subst s t2)
 subst s (SigT t k) = SigT (subst s t) k
 subst _ t = t
 
+-- Written by Richard Eisenberg in th-desugar
+
+tupleDegreeMaybe :: String -> Maybe Int
+tupleDegreeMaybe s = do
+    '(' : s1 <- return s
+    (commas, ")") <- return $ span (== ',') s1
+    let degree
+          | "" <- commas = 0
+          | otherwise    = length commas + 1
+    return degree
