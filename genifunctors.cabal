@@ -28,6 +28,7 @@ library
 
 test-suite test
     type:                exitcode-stdio-1.0
+--    ghc-options:         -ddump-splices
     main-is:             Test.hs
     build-depends:       base, template-haskell < 3, mtl, containers
     default-language:    Haskell2010
