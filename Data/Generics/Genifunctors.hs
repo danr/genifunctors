@@ -266,7 +266,7 @@ classType :: Name -> Type -> Type
 classType name inst = AppT (ConT name) inst
 #else
 classType :: Name -> Type -> Pred
-classType name inst = ClassP name inst
+classType name inst = ClassP name [inst]
 #endif
 
 -- Contributed by Víctor López Juan, https://lopezjuan.com/
