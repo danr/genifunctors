@@ -42,6 +42,7 @@ import qualified Data.Map as M
 
 import Control.Exception(assert)
 import Data.Maybe
+import Data.Char
 
 type GenM = RWST Generator [Dec] (Map Name Name) Q
 
@@ -260,12 +261,6 @@ generate tc = do
                 ]
             return fn
 
-newSanitizedName :: String -> Q Name
-newSanitizedName nb = newName $ case nb of
-    "[]" -> "_List"
-    name | Just deg <- tupleDegreeMaybe name
-             -> "_Tuple" ++ show deg
-    name -> "_" ++ name
 
 arr :: Type -> Type -> Type
 arr t1 t2 = (ArrowT `AppT` t1) `AppT` t2
@@ -276,7 +271,16 @@ applyTyVars tc ns = foldl AppT (ConT tc) (map VarT ns)
 q :: Q a -> GenM a
 q = lift
 
--- All the following functions are by Lennart in Geniplate
+-- Contributed by Víctor López Juan, https://lopezjuan.com/
+newSanitizedName :: String -> Q Name
+newSanitizedName nb = newName $ '_':'N':(
+    nb >>= \x -> case x of
+      c | isAlphaNum c || c == '\''-> [c]
+      '_' -> "__"
+      c   -> "_" ++ show (ord c))
+
+-- All the following functions are (originally) by Lennart in Geniplate
+-- Move these to a TH-util package?
 
 getTyConInfo :: Name -> GenM ([Name], [Con])
 getTyConInfo con = do
@@ -333,13 +337,3 @@ subst s (AppT t1 t2) = AppT (subst s t1) (subst s t2)
 subst s (SigT t k) = SigT (subst s t) k
 subst _ t = t
 
--- Written by Richard Eisenberg in th-desugar
-
-tupleDegreeMaybe :: String -> Maybe Int
-tupleDegreeMaybe s = do
-    '(' : s1 <- return s
-    (commas, ")") <- return $ span (== ',') s1
-    let degree
-          | "" <- commas = 0
-          | otherwise    = length commas + 1
-    return degree
