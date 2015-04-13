@@ -261,10 +261,11 @@ applyTyVars tc ns = foldl AppT (ConT tc) (map VarT ns)
 q :: Q a -> GenM a
 q = lift
 
-classType :: Name -> Type -> Type
 #if MIN_VERSION_template_haskell(2,10,0)
+classType :: Name -> Type -> Type
 classType name inst = AppT (ConT name) inst
 #else
+classType :: Name -> Type -> Pred
 classType name inst = ClassP name inst
 #endif
 
