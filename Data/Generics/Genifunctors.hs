@@ -54,15 +54,15 @@ data Generator = Generator
 
 gen :: Generator -> Name -> Q Exp
 gen g = genT g []
-        
+
 genT :: Generator -> [(Name,Name)] -> Name -> Q Exp
 genT generator predef tc = do
     forM_ predef $ \(con,_) -> do
       info <- reify con
       case info of
-        TyConI (TySynD{}) -> fail $ show con ++ " is a type synonym."
-        TyConI _          -> return ()
-        _                 -> fail $ show con ++ " is not a type constructor." 
+        TyConI TySynD{} -> fail $ show con ++ " is a type synonym."
+        TyConI _        -> return ()
+        _               -> fail $ show con ++ " is not a type constructor."
     (fn,decls) <- evalRWST (generate tc) generator $ M.fromList predef
     return $ LetE decls (VarE fn)
 
@@ -179,12 +179,7 @@ foldMapType :: Name -> [Name] -> Q Type
 foldMapType tc tvs = do
     m <- newName "m"
     from <- mapM (newName . nameBase) tvs
-    return $ ForallT (map PlainTV (m : from))
-#if MIN_VERSION_template_haskell(2,10,0)
-                                              [AppT (ConT ''Monoid) (VarT m)]
-#else
-                                              [ClassP ''Monoid [VarT m]]
-#endif
+    return $ ForallT (map PlainTV (m : from)) [classType ''Monoid (VarT m)]
            $ foldr arr
                 (applyTyVars tc from `arr` VarT m)
                 (zipWith arr (map VarT from) (repeat (VarT m)))
@@ -194,12 +189,7 @@ traverseType constraint_class tc tvs = do
     f <- newName "f"
     from <- mapM (newName . nameBase) tvs
     to   <- mapM (newName . nameBase) tvs
-    return $ ForallT (map PlainTV (f : from ++ to))
-#if MIN_VERSION_template_haskell(2,10,0)
-                                                    [AppT (ConT constraint_class) (VarT f)]
-#else
-                                                    [ClassP constraint_class [VarT f]]
-#endif
+    return $ ForallT (map PlainTV (f : from ++ to)) [classType constraint_class (VarT f)]
            $ foldr arr
                 (applyTyVars tc from `arr` (VarT f `AppT` applyTyVars tc to))
                 (zipWith arr (map VarT from) (map (\ t -> VarT f `AppT` VarT t) to))
@@ -270,6 +260,13 @@ applyTyVars tc ns = foldl AppT (ConT tc) (map VarT ns)
 
 q :: Q a -> GenM a
 q = lift
+
+classType :: Name -> Type -> Type
+#if MIN_VERSION_template_haskell(2,10,0)
+classType name inst = AppT (ConT name) inst
+#else
+classType name inst = ClassP name inst
+#endif
 
 -- Contributed by Víctor López Juan, https://lopezjuan.com/
 newSanitizedName :: String -> Q Name
