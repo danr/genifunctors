@@ -119,7 +119,7 @@ genTraverse = genTraverseT []
 --
 -- @
 --travTupleRev :: Applicative f => (a -> f a') -> (b -> f b') -> (a,b) -> f (a',b')
---travTupleRev f g (a,b) = (\b a -> (a,b)) <$> g b <*> f a
+--travTupleRev f g (a,b) = (\\b a -> (a,b)) \<$\> g b \<*\> f a
 --
 --travUCustom :: Applicative f => (a -> f a') -> (b -> f b') -> (c -> f c') -> (d -> f d') -> U a b c d -> f (U a' b' c' d')
 --travUCustom = $(genTraverseT [(''(,), 'travTupleRev), (''V, 'travVCustom)] ''U)
