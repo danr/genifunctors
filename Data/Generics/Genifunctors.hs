@@ -284,8 +284,13 @@ getTyConInfo :: Name -> GenM ([Name], [Con])
 getTyConInfo con = do
     info <- q (reify con)
     case info of
+#if MIN_VERSION_template_haskell(2,11,0)
+        TyConI (DataD _ _ tvs _ cs _) -> return (map unPlainTv tvs, cs)
+        TyConI (NewtypeD _ _ tvs _ c _) -> return (map unPlainTv tvs, [c])
+#else
         TyConI (DataD _ _ tvs cs _) -> return (map unPlainTv tvs, cs)
         TyConI (NewtypeD _ _ tvs c _) -> return (map unPlainTv tvs, [c])
+#endif
         PrimTyConI{} -> return ([], [])
         i -> error $ "unexpected TyCon: " ++ show i
   where
