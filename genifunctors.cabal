@@ -1,5 +1,5 @@
 name:                genifunctors
-version:             0.3
+version:             0.4
 synopsis:            Generate generalized fmap, foldMap and traverse
 description:         Generate (derive) fmap, foldMap and traverse for Bifunctors, Trifunctors, or a functor with any arity
 license:             BSD3
